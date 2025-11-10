@@ -11,6 +11,7 @@ import { Badge } from '../components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import ChatBox from '../components/ChatBox';
+import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
 import { 
   Search, 
   MapPin, 
@@ -48,6 +49,7 @@ const DoctorFinder = () => {
   const [bookmarkedDoctors, setBookmarkedDoctors] = useState(new Set());
   const [chatOpen, setChatOpen] = useState(false);
   const [chatDoctor, setChatDoctor] = useState(null);
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   // Redirect doctors away from this page
   useEffect(() => {
@@ -219,6 +221,58 @@ const DoctorFinder = () => {
     }
   }, [isPatient, isAdmin, toast]);
 
+  // Helpers for unread tracking using localStorage last-read timestamps
+  const getRoomId = (doctorId, patientId) => `${doctorId}_${patientId}`;
+  const getLastReadKey = (roomId) => `chatLastRead_${roomId}`;
+  const getLastReadTs = (roomId) => {
+    try {
+      return localStorage.getItem(getLastReadKey(roomId));
+    } catch {
+      return null;
+    }
+  };
+  const setLastReadTs = (roomId, ts = new Date().toISOString()) => {
+    try {
+      localStorage.setItem(getLastReadKey(roomId), ts);
+    } catch {}
+  };
+
+  // Fetch unread counts for all doctors (messages from doctor after last-read)
+  useEffect(() => {
+    const computeUnreadCounts = async () => {
+      if (!user?._id || !doctors?.length) return;
+      const token = localStorage.getItem('authToken');
+      const serverUrl = 'http://localhost:3000';
+      const entries = await Promise.all(
+        doctors.map(async (doc) => {
+          const roomId = getRoomId(doc.id, user._id);
+          const lastRead = getLastReadTs(roomId);
+          try {
+            const res = await fetch(`${serverUrl}/api/chat/${roomId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const data = await res.json();
+            if (!data?.success || !Array.isArray(data.messages)) return [doc.id, 0];
+            const count = data.messages.reduce((acc, m) => {
+              const fromDoctor = String(m.senderId) === String(doc.id);
+              if (!fromDoctor) return acc;
+              if (!lastRead) return acc + 1;
+              const created = new Date(m.createdAt).toISOString();
+              return created > lastRead ? acc + 1 : acc;
+            }, 0);
+            return [doc.id, count];
+          } catch {
+            return [doc.id, 0];
+          }
+        })
+      );
+      const map = Object.fromEntries(entries);
+      setUnreadCounts(map);
+    };
+
+    computeUnreadCounts();
+  }, [doctors, user?._id]);
+
   const handleSearch = async () => {
     setLoading(true);
     
@@ -340,6 +394,12 @@ const DoctorFinder = () => {
   const openChat = (doctor) => {
     setChatDoctor(doctor);
     setChatOpen(true);
+    // Mark as read immediately on open
+    if (user?._id && doctor?.id) {
+      const roomId = getRoomId(doctor.id, user._id);
+      setLastReadTs(roomId);
+      setUnreadCounts((prev) => ({ ...prev, [doctor.id]: 0 }));
+    }
   };
 
   const closeChat = () => {
@@ -554,18 +614,39 @@ const DoctorFinder = () => {
 
                   <div className="flex items-center justify-between pt-4 border-t">
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm">
-                        <Phone className="h-4 w-4 mr-1" />
-                        Call
-                      </Button>
-                      <Button variant="outline" size="sm">
-                        <Mail className="h-4 w-4 mr-1" />
-                        Email
-                      </Button>
-                      <Button size="sm" onClick={() => openChat(doctor)}>
-                        <MessageCircle className="h-4 w-4 mr-1" />
-                        Chat
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button variant="outline" size="sm">
+                            <Phone className="h-4 w-4 mr-1" />
+                            Call
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <span>{doctor.phone || 'Phone not available'}</span>
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button variant="outline" size="sm">
+                            <Mail className="h-4 w-4 mr-1" />
+                            Email
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <span>{doctor.email || 'Email not available'}</span>
+                        </TooltipContent>
+                      </Tooltip>
+                      <div className="relative">
+                        <Button size="sm" onClick={() => openChat(doctor)}>
+                          <MessageCircle className="h-4 w-4 mr-1" />
+                          Chat
+                        </Button>
+                        {unreadCounts[doctor.id] > 0 && (
+                          <span className="absolute -top-2 -right-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
+                            {unreadCounts[doctor.id] > 99 ? '99+' : unreadCounts[doctor.id]}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <AppointmentBookingModal doctor={doctor}>
@@ -609,12 +690,13 @@ const DoctorFinder = () => {
       </div>
       {/* Chat Dialog */}
       <Dialog open={chatOpen} onOpenChange={setChatOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-4xl max-h-[90vh] h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Chat</DialogTitle>
           </DialogHeader>
           {chatDoctor && user?._id && (
             <ChatBox
+              key={`${chatDoctor.id}_${user._id}`}
               roomId={`${chatDoctor.id}_${user._id}`}
               currentUserId={user._id}
               otherUserId={chatDoctor.id}

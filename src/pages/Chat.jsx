@@ -20,6 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { symptomsAPI, generateProfessionalAdvice } from '../api/symptoms';
 import { chatAPI, speechToText, textToSpeech } from '../api/chat';
+import { mapSymptomsToSpecialty, fetchDoctorsBySpecialty } from '../lib/doctorSuggestions';
 
 const Chat = () => {
   const [messages, setMessages] = useState([
@@ -84,6 +85,17 @@ const Chat = () => {
       const response = await chatAPI.sendMessage(content.trim(), token);
       
       if (response.success) {
+        let doctorsList = response.doctors || [];
+        let specialization = response.specialization;
+
+        if (!doctorsList || doctorsList.length === 0) {
+          // Fallback: infer specialty from user message and fetch doctors from DoctorFinder data
+          specialization = specialization || mapSymptomsToSpecialty(content.trim());
+          if (specialization) {
+            doctorsList = await fetchDoctorsBySpecialty(specialization);
+          }
+        }
+
         const botMessage = {
           id: Date.now() + 1,
           type: 'bot',
@@ -91,15 +103,16 @@ const Chat = () => {
           timestamp: new Date(),
           complexity: response.complexity,
           shouldSeeDoctor: response.shouldSeeDoctor,
-          doctors: response.doctors || []
+          doctors: doctorsList || [],
+          medicines: response.medicines || []
         };
 
         setMessages(prev => [...prev, botMessage]);
         
-        if (response.doctors && response.doctors.length > 0) {
+        if (doctorsList && doctorsList.length > 0) {
           toast({
             title: "Doctor Recommendation",
-            description: `Found ${response.doctors.length} ${response.specialization} specialist(s) available`,
+            description: `Found ${doctorsList.length} ${specialization || 'relevant'} specialist(s) available`,
             duration: 5000
           });
         }
@@ -344,6 +357,29 @@ const Chat = () => {
                     >
                       <p className="whitespace-pre-wrap leading-relaxed text-sm sm:text-base">{message.content}</p>
                       
+                      {message.type === 'bot' && message.medicines && message.medicines.length > 0 && (
+                        <div className="mt-3 p-3 bg-green-50 dark:bg-green-950/20 rounded-lg border border-green-200 dark:border-green-800">
+                          <h4 className="font-semibold text-green-900 dark:text-green-100 mb-2">
+                            Suggested Medicines:
+                          </h4>
+                          <div className="space-y-2">
+                            {message.medicines.slice(0, 2).map((m, idx) => (
+                              <div key={idx} className="p-2 bg-white dark:bg-gray-800 rounded border">
+                                <p className="font-medium text-sm">{m.condition}</p>
+                                <ul className="mt-1 list-disc list-inside text-xs text-muted-foreground space-y-1">
+                                  {(m.medicines || []).slice(0, 3).map((med, i) => (
+                                    <li key={i}>
+                                      {med.name} — {med.dose}, {med.frequency}{med.timing ? `, ${med.timing}` : ''}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="mt-2 text-[11px] text-muted-foreground">Always consult a healthcare professional before taking any medication.</p>
+                        </div>
+                      )}
+
                       {message.type === 'bot' && message.doctors && message.doctors.length > 0 && (
                         <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
                           <h4 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">

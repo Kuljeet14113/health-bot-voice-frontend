@@ -9,17 +9,10 @@ import { Badge } from '../components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import { 
   Heart, 
-  MessageCircle, 
-  FileText, 
-  NotebookPen, 
   Calendar,
   Users,
   Clock,
-  MapPin,
   Phone,
-  Mail,
-  Settings,
-  LogOut,
   CheckCircle,
   XCircle,
   AlertCircle,
@@ -57,6 +50,46 @@ const DoctorHome = () => {
   // State for patient history modal
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [completedView, setCompletedView] = useState('day');
+  // Next appointment modal state
+  const [nextModalOpen, setNextModalOpen] = useState(false);
+  const [nextForAppointment, setNextForAppointment] = useState(null);
+  const [nextForm, setNextForm] = useState({
+    appointmentDate: '',
+    appointmentTime: '',
+    reason: 'Follow-up visit',
+    symptoms: '',
+    notes: '',
+    isUrgent: false,
+  });
+
+  // Half-hour time slots (AM/PM) and converters
+  const timeSlots = [
+    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM',
+    '12:00 PM', '12:30 PM', '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM',
+    '03:00 PM', '03:30 PM', '04:00 PM', '04:30 PM', '05:00 PM', '05:30 PM'
+  ];
+
+  const toAmPmFrom24 = (hhmm) => {
+    if (!hhmm || !hhmm.includes(':')) return hhmm;
+    let [h, m] = hhmm.split(':').map(Number);
+    const meridiem = h >= 12 ? 'PM' : 'AM';
+    h = h % 12; if (h === 0) h = 12;
+    const hh = h.toString().padStart(2, '0');
+    return `${hh}:${m.toString().padStart(2, '0')} ${meridiem}`;
+  };
+
+  const to24FromAmPm = (time12h) => {
+    try {
+      const [time, meridiem] = time12h.split(' ');
+      let [hours, minutes] = time.split(':').map(Number);
+      if (meridiem === 'PM' && hours !== 12) hours += 12;
+      if (meridiem === 'AM' && hours === 12) hours = 0;
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    } catch {
+      return '';
+    }
+  };
 
   // Redirect non-doctors away from this page
   useEffect(() => {
@@ -131,6 +164,92 @@ const DoctorHome = () => {
     } catch (e) {
       console.error('Complete visit failed', e);
       toast({ title: 'Error', description: e.message || 'Failed to complete visit', variant: 'destructive' });
+    }
+  };
+
+  const openNextModal = (appointment) => {
+    setNextForAppointment(appointment);
+    setNextForm((prev) => ({
+      ...prev,
+      reason: 'Follow-up visit',
+      symptoms: '',
+      notes: '',
+      isUrgent: false,
+      appointmentDate: '',
+      appointmentTime: '',
+    }));
+    setNextModalOpen(true);
+  };
+
+  const submitNextAppointment = async () => {
+    if (!nextForAppointment) return;
+    const { appointmentDate, appointmentTime, reason, symptoms, notes, isUrgent } = nextForm;
+    if (!appointmentDate || !appointmentTime || !reason) {
+      toast({ title: 'Missing fields', description: 'Please select date, time and reason.', variant: 'destructive' });
+      return;
+    }
+    try {
+      const selectedAmPm = appointmentTime.includes('AM') || appointmentTime.includes('PM')
+        ? appointmentTime
+        : toAmPmFrom24(appointmentTime);
+      const body = {
+        // patient info from previous appointment
+        patientId: nextForAppointment.patientId || undefined,
+        patientName: nextForAppointment.patientName,
+        patientEmail: nextForAppointment.patientEmail,
+        patientPhone: nextForAppointment.patientPhone,
+        patientAge: nextForAppointment.patientAge,
+        patientGender: nextForAppointment.patientGender,
+        // doctor info
+        doctorId: user?._id,
+        // new appointment details
+        appointmentDate,
+        appointmentTime: selectedAmPm,
+        reason,
+        symptoms,
+        notes,
+        isUrgent,
+      };
+
+      const res = await fetch('http://localhost:3000/api/appointments/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Failed to assign next appointment');
+      toast({ title: 'Next Appointment Scheduled', description: 'Follow-up appointment has been created successfully.' });
+      setNextModalOpen(false);
+      setNextForAppointment(null);
+      setNextForm({ appointmentDate: '', appointmentTime: '', reason: 'Follow-up visit', symptoms: '', notes: '', isUrgent: false });
+      await Promise.all([fetchAppointments(), fetchStats()]);
+    } catch (e) {
+      // If slot conflict, suggest next half-hour slot
+      const msg = e?.message?.toLowerCase?.() || '';
+      if (msg.includes('time slot is already booked') || msg.includes('conflict') || msg.includes('409')) {
+        try {
+          const availResp = await fetch(`http://localhost:3000/api/appointments/doctor/${user?._id}/availability?date=${nextForm.appointmentDate}`);
+          const avail = await availResp.json();
+          const currentlyBooked = Array.isArray(avail.bookedSlots) ? avail.bookedSlots : [];
+          const selectedAmPm = toAmPmFrom24(nextForm.appointmentTime);
+          const idx = timeSlots.findIndex(t => t === selectedAmPm);
+          let suggestion = '';
+          for (let i = idx + 1; i < timeSlots.length; i++) {
+            if (!currentlyBooked.includes(timeSlots[i])) { suggestion = timeSlots[i]; break; }
+          }
+          if (suggestion) {
+            setNextForm(prev => ({ ...prev, appointmentTime: to24FromAmPm(suggestion) }));
+            toast({ title: 'Slot Unavailable', description: `That time just got booked. Suggested next slot set to ${suggestion}. Please submit again.` });
+          } else {
+            toast({ title: 'No Slots Available', description: 'No further slots are available today. Please choose another date.', variant: 'destructive' });
+          }
+        } catch (err2) {
+          toast({ title: 'Time Unavailable', description: 'This time slot is already booked. Please choose another time.', variant: 'destructive' });
+        }
+      } else {
+        console.error('Assign next appointment failed', e);
+        toast({ title: 'Error', description: e.message || 'Failed to assign next appointment', variant: 'destructive' });
+      }
     }
   };
 
@@ -236,6 +355,7 @@ const DoctorHome = () => {
 
   // Get pending appointments
   const pendingAppointments = appointments.filter(apt => apt.status === 'pending');
+  const hasSidebar = pendingAppointments.length > 0;
 
   const getStatusIcon = (status) => {
     switch (status) {
@@ -266,6 +386,32 @@ const DoctorHome = () => {
         return 'secondary';
     }
   };
+
+  const completedAppointments = appointments
+    .filter((apt) => apt.status === 'completed')
+    .sort((a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate));
+
+  const formatMonth = (date) =>
+    date.toLocaleString('default', { month: 'short', year: 'numeric' });
+
+  const groupedCompleted = (() => {
+    const map = new Map();
+    for (const apt of completedAppointments) {
+      const d = new Date(apt.appointmentDate);
+      const key = completedView === 'month' ? `${d.getFullYear()}-${d.getMonth()}` : d.toDateString();
+      const label = completedView === 'month' ? formatMonth(d) : d.toLocaleDateString();
+      if (!map.has(key)) map.set(key, { label, items: [] });
+      map.get(key).items.push({
+        id: apt._id,
+        name: apt.patientName,
+        time: apt.appointmentTime,
+        date: d,
+      });
+    }
+    const arr = Array.from(map.values());
+    arr.sort((a, b) => b.items[0].date - a.items[0].date);
+    return arr;
+  })();
 
   // If user is not a doctor, show access denied
   if (!isDoctor) {
@@ -336,9 +482,9 @@ const DoctorHome = () => {
           })}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className={`grid grid-cols-1 ${hasSidebar ? 'lg:grid-cols-3' : 'lg:grid-cols-1'} gap-6`}>
           {/* Today's Appointments */}
-          <div className="lg:col-span-2">
+          <div className={hasSidebar ? 'lg:col-span-2' : ''}>
             <Card className="shadow-card">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -421,6 +567,14 @@ const DoctorHome = () => {
                                 >
                                   Cancel
                                 </Button>
+                                <Button 
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openNextModal(appointment)}
+                                  className="text-xs px-2 py-1 h-6"
+                                >
+                                  Assign Next
+                                </Button>
                               </div>
                             )}
                             {appointment.status === 'confirmed' && (
@@ -431,6 +585,26 @@ const DoctorHome = () => {
                                   className="text-xs px-2 py-1 h-6"
                                 >
                                   Completed
+                                </Button>
+                                <Button 
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openNextModal(appointment)}
+                                  className="text-xs px-2 py-1 h-6"
+                                >
+                                  Assign Next
+                                </Button>
+                              </div>
+                            )}
+                            {appointment.status === 'completed' && (
+                              <div className="flex gap-1 mt-2">
+                                <Button 
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openNextModal(appointment)}
+                                  className="text-xs px-2 py-1 h-6"
+                                >
+                                  Assign Next
                                 </Button>
                               </div>
                             )}
@@ -464,9 +638,9 @@ const DoctorHome = () => {
           </div>
 
           {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Pending Appointments */}
-            {pendingAppointments.length > 0 && (
+          {hasSidebar && (
+            <div className="space-y-6">
+              {/* Pending Appointments */}
               <Card className="shadow-card">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -529,6 +703,14 @@ const DoctorHome = () => {
                             <XCircle className="h-3 w-3 mr-1" />
                             Cancel
                           </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            onClick={() => openNextModal(appointment)}
+                            className="text-xs px-2 py-1 h-6 flex-1"
+                          >
+                            Assign Next
+                          </Button>
                         </div>
                       </div>
                     ))}
@@ -540,102 +722,77 @@ const DoctorHome = () => {
                   </div>
                 </CardContent>
               </Card>
-            )}
-
-            {/* Quick Actions */}
-            <Card className="shadow-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Settings className="h-5 w-5" />
-                  Quick Actions
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/doctor/chat-with-patient')}>
-                  <MessageCircle className="h-4 w-4 mr-2" />
-                  Chat with Patients
-                </Button>
-                <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/prescription')}>
-                  <FileText className="h-4 w-4 mr-2" />
-                  Write Prescriptions
-                </Button>
-                <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/summarizer')}>
-                  <NotebookPen className="h-4 w-4 mr-2" />
-                  Medical Summaries
-                </Button>
-                <Button variant="outline" className="w-full justify-start" onClick={() => navigate('/profile')}>
-                  <Settings className="h-4 w-4 mr-2" />
-                  Update Profile
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Doctor Info */}
-            <Card className="shadow-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Heart className="h-5 w-5" />
-                  Your Information
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-center gap-2 text-sm">
-                  <MapPin className="h-4 w-4 text-muted-foreground" />
-                  <span>Location: {user?.location || 'Not specified'}</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <Phone className="h-4 w-4 text-muted-foreground" />
-                  <span>Phone: {user?.phone || 'Not specified'}</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <Mail className="h-4 w-4 text-muted-foreground" />
-                  <span>Email: {user?.email}</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <Clock className="h-4 w-4 text-muted-foreground" />
-                  <span>Experience: {user?.experience || 'Not specified'}</span>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+            </div>
+          )}
         </div>
 
-        {/* Bottom Section */}
         <div className="mt-8">
           <Card className="shadow-card">
             <CardHeader>
-              <CardTitle>Need Help?</CardTitle>
-              <CardDescription>
-                Get support and learn more about using HealthBot Voice
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <CheckCircle className="h-5 w-5 text-blue-600" />
+                    Completed Appointments
+                  </CardTitle>
+                  <CardDescription>
+                    Total completed: {stats.completed}
+                  </CardDescription>
+                </div>
+                <div className="inline-flex rounded-md border overflow-hidden">
+                  <button
+                    className={`px-3 py-1 text-sm ${completedView === 'day' ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
+                    onClick={() => setCompletedView('day')}
+                  >
+                    Daywise
+                  </button>
+                  <button
+                    className={`px-3 py-1 text-sm border-l ${completedView === 'month' ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
+                    onClick={() => setCompletedView('month')}
+                  >
+                    Monthwise
+                  </button>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <Button variant="outline" className="h-auto p-4 flex flex-col items-center gap-2">
-                  <FileText className="h-6 w-6" />
-                  <span>Documentation</span>
-                </Button>
-                <Button variant="outline" className="h-auto p-4 flex flex-col items-center gap-2">
-                  <MessageCircle className="h-6 w-6" />
-                  <span>Support Chat</span>
-                </Button>
-                <Button variant="outline" className="h-auto p-4 flex flex-col items-center gap-2">
-                  <Mail className="h-6 w-6" />
-                  <span>Contact Us</span>
-                </Button>
-              </div>
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="h-6 w-6 animate-spin" />
+                  <span className="ml-2">Loading completed appointments...</span>
+                </div>
+              ) : groupedCompleted.length === 0 ? (
+                <div className="text-center py-8">
+                  <CheckCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
+                  <p className="text-muted-foreground">No completed appointments yet</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {groupedCompleted.map((group, idx) => (
+                    <div key={idx} className="border rounded-lg">
+                      <div className="flex items-center justify-between p-3 bg-muted/50 rounded-t-lg">
+                        <p className="text-sm font-medium">{group.label}</p>
+                        <Badge variant="secondary" className="text-xs">{group.items.length}</Badge>
+                      </div>
+                      <div className="divide-y">
+                        {group.items.map((item) => (
+                          <div key={item.id} className="flex items-center justify-between p-3">
+                            <div className="flex items-center gap-2">
+                              <Users className="h-4 w-4 text-primary" />
+                              <span className="font-medium text-sm">{item.name}</span>
+                            </div>
+                            <span className="text-xs text-muted-foreground">{item.time}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
-
-      {/* Patient History Modal */}
-      <PatientHistoryModal
-        isOpen={isHistoryModalOpen}
-        onClose={closeHistoryModal}
-        patient={selectedPatient}
-        doctorId={user?._id}
-      />
 
       {/* Complete Visit Modal */}
       <Dialog open={completeModalOpen} onOpenChange={setCompleteModalOpen}>
@@ -656,6 +813,69 @@ const DoctorHome = () => {
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setCompleteModalOpen(false)}>Cancel</Button>
               <Button onClick={submitCompleteVisit}>Mark Completed</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Assign Next Appointment Modal */}
+      <Dialog open={nextModalOpen} onOpenChange={setNextModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Assign Next Appointment</DialogTitle>
+            <DialogDescription>Schedule a follow-up for {nextForAppointment?.patientName}.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="next-date">Date</Label>
+                <Input
+                  id="next-date"
+                  type="date"
+                  value={nextForm.appointmentDate}
+                  onChange={(e) => setNextForm({ ...nextForm, appointmentDate: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label htmlFor="next-time">Time</Label>
+                <Input
+                  id="next-time"
+                  type="time"
+                  value={nextForm.appointmentTime}
+                  onChange={(e) => setNextForm({ ...nextForm, appointmentTime: e.target.value })}
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="next-reason">Reason</Label>
+              <Input
+                id="next-reason"
+                placeholder="Follow-up visit"
+                value={nextForm.reason}
+                onChange={(e) => setNextForm({ ...nextForm, reason: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="next-symptoms">Symptoms (optional)</Label>
+              <Textarea
+                id="next-symptoms"
+                placeholder="Any symptoms to note"
+                value={nextForm.symptoms}
+                onChange={(e) => setNextForm({ ...nextForm, symptoms: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="next-notes">Notes (optional)</Label>
+              <Textarea
+                id="next-notes"
+                placeholder="Additional notes"
+                value={nextForm.notes}
+                onChange={(e) => setNextForm({ ...nextForm, notes: e.target.value })}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setNextModalOpen(false)}>Cancel</Button>
+              <Button onClick={submitNextAppointment}>Schedule</Button>
             </div>
           </div>
         </DialogContent>

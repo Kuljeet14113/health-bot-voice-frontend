@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -9,10 +9,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Badge } from './ui/badge';
 import { Calendar, Clock, User, Phone, Mail, MapPin, AlertCircle, CheckCircle } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
+import { useAuth } from '../contexts/AuthContext';
 
 const AppointmentBookingModal = ({ doctor, children }) => {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [bookedSlots, setBookedSlots] = useState([]);
   const [formData, setFormData] = useState({
     patientName: '',
     patientEmail: '',
@@ -27,12 +29,69 @@ const AppointmentBookingModal = ({ doctor, children }) => {
     isUrgent: false
   });
   const { toast } = useToast();
+  const { user } = useAuth();
+
+  useEffect(() => {
+    if (open && user) {
+      setFormData((prev) => ({
+        ...prev,
+        patientName: prev.patientName || user.name || '',
+        patientEmail: prev.patientEmail || user.email || '',
+        patientPhone: prev.patientPhone || user.phone || '',
+      }));
+    }
+  }, [open, user]);
 
   const timeSlots = [
     '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM',
     '12:00 PM', '12:30 PM', '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM',
     '03:00 PM', '03:30 PM', '04:00 PM', '04:30 PM', '05:00 PM', '05:30 PM'
   ];
+
+  const to24Hour = (time12h) => {
+    try {
+      const [time, meridiem] = time12h.split(' ');
+      let [hours, minutes] = time.split(':').map(Number);
+      if (meridiem === 'PM' && hours !== 12) hours += 12;
+      if (meridiem === 'AM' && hours === 12) hours = 0;
+      return { hours, minutes };
+    } catch {
+      return { hours: 0, minutes: 0 };
+    }
+  };
+
+  const isToday = (dateString) => {
+    if (!dateString) return false;
+    const d = new Date(dateString);
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  };
+
+  const isPastTimeForSelectedDate = (dateString, time12h) => {
+    if (!dateString || !time12h) return false;
+    const { hours, minutes } = to24Hour(time12h);
+    const slot = new Date(dateString);
+    slot.setHours(hours, minutes, 0, 0);
+    return slot.getTime() < Date.now();
+  };
+
+  useEffect(() => {
+    const fetchAvailability = async () => {
+      if (!doctor?.id || !formData.appointmentDate) return;
+      try {
+        const resp = await fetch(`http://localhost:3000/api/appointments/doctor/${doctor.id}/availability?date=${formData.appointmentDate}`);
+        const data = await resp.json();
+        if (data.success) {
+          setBookedSlots(data.bookedSlots || []);
+        } else {
+          setBookedSlots([]);
+        }
+      } catch (e) {
+        setBookedSlots([]);
+      }
+    };
+    fetchAvailability();
+  }, [doctor?.id, formData.appointmentDate]);
 
   const isWeekend = (dateString) => {
     try {
@@ -143,7 +202,7 @@ const AppointmentBookingModal = ({ doctor, children }) => {
 
       const data = await response.json();
 
-      if (data.success) {
+      if (response.ok && data.success) {
         toast({
           title: "Appointment Request Submitted!",
           description: "Your appointment request has been submitted successfully. You will receive an email notification once the doctor reviews your request.",
@@ -164,7 +223,47 @@ const AppointmentBookingModal = ({ doctor, children }) => {
           isUrgent: false
         });
       } else {
-        throw new Error(data.message || 'Failed to book appointment');
+        // If the slot just got taken, suggest next half-hour slot
+        if (response.status === 409 || (data.message || '').toLowerCase().includes('time slot is already booked')) {
+          try {
+            // Fetch latest availability for selected date
+            const availResp = await fetch(`http://localhost:3000/api/appointments/doctor/${doctor.id}/availability?date=${formData.appointmentDate}`);
+            const avail = await availResp.json();
+            const currentlyBooked = Array.isArray(avail.bookedSlots) ? avail.bookedSlots : bookedSlots;
+
+            // Find next half-hour slot after selected time
+            const idx = timeSlots.findIndex(t => t === formData.appointmentTime);
+            let suggestion = '';
+            for (let i = idx + 1; i < timeSlots.length; i++) {
+              if (!currentlyBooked.includes(timeSlots[i])) {
+                suggestion = timeSlots[i];
+                break;
+              }
+            }
+
+            if (suggestion) {
+              setFormData(prev => ({ ...prev, appointmentTime: suggestion }));
+              toast({
+                title: 'Slot Unavailable',
+                description: `That time just got booked. Suggested next slot set to ${suggestion}. Please submit again.`,
+              });
+            } else {
+              toast({
+                title: 'No Slots Available',
+                description: 'No further slots are available today. Please choose another date.',
+                variant: 'destructive'
+              });
+            }
+          } catch {
+            toast({
+              title: 'Time Unavailable',
+              description: 'This time slot is already booked. Please choose another time.',
+              variant: 'destructive'
+            });
+          }
+        } else {
+          throw new Error(data.message || 'Failed to book appointment');
+        }
       }
     } catch (error) {
       console.error('Booking error:', error);
@@ -341,6 +440,7 @@ const AppointmentBookingModal = ({ doctor, children }) => {
                       return;
                     }
                     handleInputChange('appointmentDate', value);
+                    handleInputChange('appointmentTime', '');
                   }}
                   min={getMinDate()}
                   required
@@ -349,16 +449,50 @@ const AppointmentBookingModal = ({ doctor, children }) => {
               
               <div className="space-y-2">
                 <Label htmlFor="appointmentTime">Time *</Label>
-                <Select value={formData.appointmentTime} onValueChange={(value) => handleInputChange('appointmentTime', value)}>
+                <Select
+                  value={formData.appointmentTime}
+                  onValueChange={(value) => {
+                    const taken = bookedSlots.includes(value);
+                    const past = isPastTimeForSelectedDate(formData.appointmentDate, value);
+                    if (taken) {
+                      toast({
+                        title: "Time Unavailable",
+                        description: "This time slot is already booked. Please choose another time.",
+                        variant: "destructive"
+                      });
+                      return;
+                    }
+                    if (past) {
+                      toast({
+                        title: "Invalid Time",
+                        description: "You cannot select a past time.",
+                        variant: "destructive"
+                      });
+                      return;
+                    }
+                    handleInputChange('appointmentTime', value);
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Select time slot" />
                   </SelectTrigger>
                   <SelectContent>
-                    {timeSlots.map((time) => (
-                      <SelectItem key={time} value={time}>
-                        {time}
-                      </SelectItem>
-                    ))}
+                    {timeSlots
+                      .map((time) => {
+                        const taken = bookedSlots.includes(time);
+                        const past = isPastTimeForSelectedDate(formData.appointmentDate, time);
+                        const disabled = taken || (isToday(formData.appointmentDate) && past);
+                        return (
+                          <SelectItem
+                            key={time}
+                            value={time}
+                            disabled={disabled}
+                            className={taken ? 'text-red-600' : ''}
+                          >
+                            {taken ? `${time} (Booked)` : (isToday(formData.appointmentDate) && past ? `${time} (Past)` : time)}
+                          </SelectItem>
+                        );
+                      })}
                   </SelectContent>
                 </Select>
               </div>

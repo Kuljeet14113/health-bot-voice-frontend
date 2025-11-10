@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { prescriptionAPI } from '../api/prescription';
+import { mapSymptomsToSpecialty, fetchDoctorsBySpecialty } from '../lib/doctorSuggestions';
 
 const Prescription = () => {
   const [symptoms, setSymptoms] = useState('');
@@ -33,6 +34,7 @@ const Prescription = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [prescription, setPrescription] = useState(null);
   const [recommendedDoctor, setRecommendedDoctor] = useState(null);
+  const [suggestedMedicines, setSuggestedMedicines] = useState([]);
 
   const { toast } = useToast();
 
@@ -43,12 +45,45 @@ const Prescription = () => {
     }));
   };
 
+  const handleNumberChange = (field, value) => {
+    if (value === '') {
+      setPatientInfo(prev => ({ ...prev, [field]: '' }));
+      return;
+    }
+    const n = Number(value);
+    if (Number.isNaN(n)) return;
+    if (n < 0) return; // disallow negative
+    setPatientInfo(prev => ({ ...prev, [field]: String(n) }));
+  };
+
+  const cleansePrescriptionText = (text) => {
+    if (!text) return text;
+    let t = text;
+    // Remove WARNINGS section
+    t = t.replace(/\n?WARNINGS:[\s\S]*?(?=\n\n[A-Z][A-Z \-()']+:|\n\nDISCLAIMER:|$)/g, '\n');
+    // Remove FOLLOW-UP / FOLLOW UP section
+    t = t.replace(/\n?FOLLOW[- ]?UP:[\s\S]*?(?=\n\n[A-Z][A-Z \-()']+:|\n\nDISCLAIMER:|$)/g, '\n');
+    return t.trim();
+  };
+
 
   const generatePrescription = async () => {
     if (!symptoms.trim()) {
       toast({
         title: "Missing Information",
         description: "Please describe your symptoms.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Validate non-negative age/weight
+    const ageNum = patientInfo.age === '' ? null : Number(patientInfo.age);
+    const weightNum = patientInfo.weight === '' ? null : Number(patientInfo.weight);
+    if ((ageNum !== null && ageNum < 0) || (weightNum !== null && weightNum < 0)) {
+      toast({
+        title: "Invalid Input",
+        description: "Age and Weight cannot be negative.",
         variant: "destructive"
       });
       return;
@@ -73,8 +108,21 @@ const Prescription = () => {
       const response = await prescriptionAPI.generatePrescription(prescriptionData, token);
       
       if (response.success) {
-        setPrescription(response.prescription);
-        setRecommendedDoctor(response.doctor);
+        setPrescription(cleansePrescriptionText(response.prescription));
+
+        let doctor = response.doctor || null;
+        if (!doctor) {
+          const specialty = mapSymptomsToSpecialty(symptoms.trim());
+          if (specialty) {
+            const matches = await fetchDoctorsBySpecialty(specialty);
+            if (matches && matches.length > 0) {
+              doctor = matches[0];
+            }
+          }
+        }
+
+        setRecommendedDoctor(doctor);
+        setSuggestedMedicines(Array.isArray(response.medicines) ? response.medicines : []);
         
         toast({
           title: "Prescription Generated",
@@ -123,7 +171,21 @@ FOLLOW-UP:
 DISCLAIMER:
 This is an AI-generated recommendation for informational purposes only.`;
 
-      setPrescription(demoPrescription);
+      setPrescription(cleansePrescriptionText(demoPrescription));
+
+      // Try to suggest a doctor even on fallback
+      try {
+        const specialty = mapSymptomsToSpecialty(symptoms.trim());
+        if (specialty) {
+          const matches = await fetchDoctorsBySpecialty(specialty);
+          if (matches && matches.length > 0) {
+            setRecommendedDoctor(matches[0]);
+          }
+        }
+      } catch (_) {
+        // ignore fallback suggestion errors
+      }
+      setSuggestedMedicines([]);
     } finally {
       setIsLoading(false);
     }
@@ -133,6 +195,14 @@ This is an AI-generated recommendation for informational purposes only.`;
     if (!prescription) return;
 
     let prescriptionText = prescription;
+    
+    // Add suggested medicines if available
+    if (suggestedMedicines && suggestedMedicines.length > 0) {
+      prescriptionText += `\n\nSUGGESTED MEDICINES (from dataset):`;
+      suggestedMedicines.forEach((m, idx) => {
+        prescriptionText += `\n${idx + 1}. ${m.name} — ${m.dose}, ${m.frequency} (Timing: ${m.timing})${m.condition ? ` [for ${m.condition}]` : ''}`;
+      });
+    }
     
     // Add doctor information if available
     if (recommendedDoctor) {
@@ -155,6 +225,14 @@ Location: ${recommendedDoctor.location}`;
     if (!prescription) return;
 
     let prescriptionText = prescription;
+    
+    // Add suggested medicines if available
+    if (suggestedMedicines && suggestedMedicines.length > 0) {
+      prescriptionText += `\n\nSUGGESTED MEDICINES (from dataset):`;
+      suggestedMedicines.forEach((m, idx) => {
+        prescriptionText += `\n${idx + 1}. ${m.name} — ${m.dose}, ${m.frequency} (Timing: ${m.timing})${m.condition ? ` [for ${m.condition}]` : ''}`;
+      });
+    }
     
     // Add doctor information if available
     if (recommendedDoctor) {
@@ -230,7 +308,8 @@ Location: ${recommendedDoctor.location}`;
                       id="age"
                       type="number"
                       value={patientInfo.age}
-                      onChange={(e) => handleInputChange('age', e.target.value)}
+                      min={0}
+                      onChange={(e) => handleNumberChange('age', e.target.value)}
                       placeholder="Age"
                     />
                   </div>
@@ -240,7 +319,8 @@ Location: ${recommendedDoctor.location}`;
                       id="weight"
                       type="number"
                       value={patientInfo.weight}
-                      onChange={(e) => handleInputChange('weight', e.target.value)}
+                      min={0}
+                      onChange={(e) => handleNumberChange('weight', e.target.value)}
                       placeholder="Weight"
                     />
                   </div>
@@ -333,6 +413,33 @@ Location: ${recommendedDoctor.location}`;
                       {prescription}
                     </pre>
                   </div>
+
+                  {/* Suggested Medicines */}
+                  {suggestedMedicines && suggestedMedicines.length > 0 && (
+                    <>
+                      <Separator />
+                      <div className="rounded-lg p-4 border">
+                        <h3 className="font-semibold mb-3 flex items-center gap-2">
+                          <CheckCircle className="h-5 w-5" />
+                          Suggested Medicines
+                        </h3>
+                        <div className="space-y-3">
+                          {suggestedMedicines.map((m, idx) => (
+                            <div key={`${m.name}-${idx}`} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3 bg-muted/30 rounded">
+                              <div className="space-y-1">
+                                <div className="font-medium">{m.name}</div>
+                                <div className="text-sm text-muted-foreground">Dose: {m.dose} • Frequency: {m.frequency} • Timing: {m.timing}</div>
+                              </div>
+                              {m.condition && (
+                                <Badge variant="secondary" className="w-fit">{m.condition}</Badge>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-2">These are dataset-based suggestions. Confirm with your clinician before use.</p>
+                      </div>
+                    </>
+                  )}
 
                   {/* Recommended Doctor */}
                   {recommendedDoctor && (

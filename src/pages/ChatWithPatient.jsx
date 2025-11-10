@@ -91,7 +91,7 @@ const ChatWithPatient = () => {
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-4xl max-h-[90vh] h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Chat</DialogTitle>
           </DialogHeader>

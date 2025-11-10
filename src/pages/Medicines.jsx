@@ -8,11 +8,15 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { medicinesAPI } from '../api/medicines';
-import { CheckCircle, Copy, Download, Pill, Printer } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import io from 'socket.io-client';
+import { CheckCircle, Copy, Download, Pill, Printer, MessageCircle, Send } from 'lucide-react';
 
 const Medicines = () => {
+  const { user, isDoctor } = useAuth();
   const [conditions, setConditions] = useState([]);
   const [selectedCondition, setSelectedCondition] = useState('');
   const [selectedMedicines, setSelectedMedicines] = useState([]);
@@ -20,7 +24,12 @@ const Medicines = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const { toast } = useToast();
 
+  const [sendOpen, setSendOpen] = useState(false);
+  const [rooms, setRooms] = useState([]);
+  const [loadingRooms, setLoadingRooms] = useState(false);
+
   const token = useMemo(() => localStorage.getItem('authToken'), []);
+  const SERVER_URL = 'http://localhost:3000';
 
   useEffect(() => {
     const load = async () => {
@@ -125,6 +134,51 @@ const Medicines = () => {
     w.document.close();
     w.focus();
     w.print();
+  };
+
+  const fetchRooms = async () => {
+    if (!isDoctor || !user?._id) return;
+    setLoadingRooms(true);
+    try {
+      const res = await fetch(`${SERVER_URL}/api/chat/rooms?doctorId=${user._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.success) setRooms(data.rooms || []);
+    } catch (e) {
+      console.error('Failed to fetch rooms', e);
+      toast({ title: 'Error', description: 'Failed to load patient list', variant: 'destructive' });
+    } finally {
+      setLoadingRooms(false);
+    }
+  };
+
+  const openSendDialog = () => {
+    if (!compiledText) return;
+    setSendOpen(true);
+    fetchRooms();
+  };
+
+  const sendToPatient = async (room) => {
+    if (!compiledText || !user?._id || !room?.patientId) return;
+    try {
+      const socket = io(SERVER_URL, { withCredentials: true });
+      const payload = {
+        roomId: room.roomId || `${user._id}_${room.patientId}`,
+        senderId: user._id,
+        receiverId: room.patientId,
+        message: compiledText,
+        fileUrl: '',
+      };
+      socket.emit('joinRoom', payload.roomId);
+      socket.emit('sendMessage', payload);
+      setSendOpen(false);
+      toast({ title: 'Sent', description: `Prescription sent to ${room.patientName}` });
+      setTimeout(() => socket.disconnect(), 500);
+    } catch (e) {
+      console.error('Send to patient failed', e);
+      toast({ title: 'Error', description: 'Failed to send to patient', variant: 'destructive' });
+    }
   };
 
   return (
@@ -242,6 +296,9 @@ const Medicines = () => {
                 <Button variant="outline" onClick={printList} disabled={!compiledText}>
                   <Printer className="h-4 w-4 mr-2" /> Print
                 </Button>
+                <Button onClick={openSendDialog} disabled={!compiledText || !isDoctor}>
+                  <Send className="h-4 w-4 mr-2" /> Send to Patient
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -271,6 +328,38 @@ const Medicines = () => {
           </Card>
         </div>
       </div>
+
+      <Dialog open={sendOpen} onOpenChange={setSendOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Send Prescription to Patient</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {loadingRooms ? (
+              <div className="text-sm text-muted-foreground">Loading patients...</div>
+            ) : rooms.length === 0 ? (
+              <div className="text-sm text-muted-foreground">No active patient chats. Ask the patient to start a chat.</div>
+            ) : (
+              <div className="space-y-2">
+                {rooms.map((r) => (
+                  <div key={r.roomId} className="flex items-center justify-between p-3 border rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <MessageCircle className="h-4 w-4" />
+                      <div>
+                        <div className="font-medium text-sm">{r.patientName}</div>
+                        <div className="text-xs text-muted-foreground">{r.patientId}</div>
+                      </div>
+                    </div>
+                    <Button size="sm" onClick={() => sendToPatient(r)}>
+                      <Send className="h-4 w-4 mr-1" /> Send
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

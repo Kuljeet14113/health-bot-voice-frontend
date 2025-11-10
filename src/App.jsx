@@ -23,6 +23,7 @@ import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
 import Medicines from "./pages/Medicines";
 import ChatWithPatient from "./pages/ChatWithPatient";
+import HomeRemedies from "./pages/HomeRemedies";
 
 const queryClient = new QueryClient();
 
@@ -117,6 +118,14 @@ const App = () => (
                   <Admin />
                 </ProtectedRoute>
               } 
+            />
+            <Route 
+              path="/home-remedies" 
+              element={
+                <ProtectedRoute>
+                  <HomeRemedies />
+                </ProtectedRoute>
+              }
             />
             <Route path="*" element={<NotFound />} />
           </Routes>

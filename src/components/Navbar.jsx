@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import PatientAppointmentsModal from './PatientAppointmentsModal';
@@ -29,10 +29,12 @@ import {
   Phone,
   ChevronDown,
   XCircle,
-  Pill
+  Pill,
+  Leaf
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '../hooks/use-toast';
+import io from 'socket.io-client';
 
 const Navbar = () => {
   const { user, logout, isAdmin, isDoctor, isPatient } = useAuth();
@@ -40,6 +42,11 @@ const Navbar = () => {
   const location = useLocation();
   const { toast } = useToast();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [unread, setUnread] = useState(0);
+  const socketRef = useRef(null);
+  const SERVER_URL = 'http://localhost:3000';
+  const audioCtxRef = useRef(null);
+  const nameMapRef = useRef({}); // userId -> display name
   
   // Doctor dashboard state
   const [doctorStats, setDoctorStats] = useState({
@@ -60,6 +67,102 @@ const Navbar = () => {
     logout();
     navigate('/');
   };
+
+  // Small beep using WebAudio API
+  const playBeep = () => {
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      const ctx = audioCtxRef.current;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 880;
+      o.connect(g);
+      g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.05, ctx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.3);
+      o.start();
+      o.stop(ctx.currentTime + 0.3);
+    } catch {}
+  };
+
+  // Setup socket notifications
+  useEffect(() => {
+    if (!user?._id) return;
+
+    const s = io(SERVER_URL, { withCredentials: true });
+    socketRef.current = s;
+
+    const joinRooms = async () => {
+      try {
+        const token = localStorage.getItem('authToken');
+        if (isDoctor) {
+          const res = await fetch(`${SERVER_URL}/api/chat/rooms?doctorId=${user._id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json();
+          if (data.success && Array.isArray(data.rooms)) {
+            data.rooms.forEach(r => {
+              s.emit('joinRoom', r.roomId);
+              if (r.patientId && r.patientName) {
+                nameMapRef.current[String(r.patientId)] = r.patientName;
+              }
+              if (r.doctorId && r.doctorName) {
+                nameMapRef.current[String(r.doctorId)] = r.doctorName;
+              }
+            });
+          }
+        } else if (isPatient) {
+          // Try patient rooms endpoint (if available)
+          try {
+            const res = await fetch(`${SERVER_URL}/api/chat/rooms?patientId=${user._id}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const data = await res.json();
+            if (data.success && Array.isArray(data.rooms)) {
+              data.rooms.forEach(r => {
+                s.emit('joinRoom', r.roomId);
+                if (r.doctorId && (r.doctorName || r.doctor)) {
+                  nameMapRef.current[String(r.doctorId)] = r.doctorName || r.doctor || 'Doctor';
+                }
+                if (r.patientId && r.patientName) {
+                  nameMapRef.current[String(r.patientId)] = r.patientName;
+                }
+              });
+            }
+          } catch {}
+        }
+      } catch {}
+    };
+
+    joinRooms();
+
+    s.on('receiveMessage', (msg) => {
+      // Only notify if this user is the receiver
+      if (String(msg.receiverId) !== String(user._id)) return;
+
+      // Increment unread if not currently viewing chat page
+      const onChatPage = isDoctor
+        ? location.pathname.startsWith('/doctor/chat-with-patient')
+        : location.pathname.startsWith('/chat');
+      if (!onChatPage) setUnread((u) => u + 1);
+
+      playBeep();
+      const senderName = nameMapRef.current[String(msg.senderId)] || 'New message';
+      toast({
+        title: senderName,
+        description: msg.message ? (msg.message.length > 80 ? msg.message.slice(0, 80) + '…' : msg.message) : 'You received an attachment',
+      });
+    });
+
+    return () => {
+      try { s.disconnect(); } catch {}
+      socketRef.current = null;
+    };
+  }, [user?._id, isDoctor, isPatient]);
 
   // Fetch doctor dashboard data
   const fetchDoctorDashboard = async () => {
@@ -183,14 +286,22 @@ const Navbar = () => {
     }
   };
 
-  const navItems = [
-    { name: 'Chat', href: '/chat', icon: MessageCircle },
-    { name: 'Prescription', href: '/prescription', icon: FileText },
-  ];
+  // Build navigation items based on role
+  const navItems = [];
+
+  if (isDoctor) {
+    // Doctor-specific nav: Chat with Patients, no Prescription in navbar
+    navItems.push({ name: 'Chat with Patients', href: '/doctor/chat-with-patient', icon: MessageCircle });
+  } else {
+    // Non-doctors: regular Chat and Prescription
+    navItems.push({ name: 'Chat', href: '/chat', icon: MessageCircle });
+    navItems.push({ name: 'Prescription', href: '/prescription', icon: FileText });
+  }
 
   // Only show "Find Doctors" for patients (not for doctors or admins)
   if (isPatient) {
     navItems.push({ name: 'Find Doctors', href: '/doctors', icon: Users });
+    navItems.push({ name: 'Home Remedies', href: '/home-remedies', icon: Leaf });
   }
 
   // Only show "Patient History" for doctors
@@ -207,6 +318,14 @@ const Navbar = () => {
   const getInitials = (name) => {
     return name ? name.split(' ').map(n => n[0]).join('').toUpperCase() : 'U';
   };
+
+  // Clear unread when entering chat routes
+  useEffect(() => {
+    const onChatPage = isDoctor
+      ? location.pathname.startsWith('/doctor/chat-with-patient')
+      : location.pathname.startsWith('/chat');
+    if (onChatPage && unread > 0) setUnread(0);
+  }, [location.pathname, isDoctor, unread]);
 
   return (
     <nav className="bg-card border-b border-border shadow-card sticky top-0 z-50">
@@ -374,7 +493,7 @@ const Navbar = () => {
                       <Calendar className="mr-2 h-4 w-4" />
                       <span>Full Dashboard</span>
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => navigate('/chat')}>
+                    <DropdownMenuItem onClick={() => navigate('/doctor/chat-with-patient')}>
                       <MessageCircle className="mr-2 h-4 w-4" />
                       <span>Chat with Patients</span>
                     </DropdownMenuItem>
@@ -405,7 +524,14 @@ const Navbar = () => {
                         : "text-muted-foreground hover:text-foreground hover:bg-muted"
                     )}
                   >
-                    <Icon className="h-4 w-4" />
+                    <span className="relative inline-flex items-center justify-center">
+                      <Icon className="h-4 w-4" />
+                      {(item.name.includes('Chat')) && unread > 0 && (
+                        <span className="absolute -top-2 -right-2 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-red-600 text-white text-[10px] leading-none shadow">
+                          {unread > 99 ? '99+' : unread}
+                        </span>
+                      )}
+                    </span>
                     <span>{item.name}</span>
                   </Link>
                 );
