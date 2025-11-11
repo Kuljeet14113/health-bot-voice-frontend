@@ -27,6 +27,8 @@ import {
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 
+const SERVER_URL = 'http://localhost:3000';
+
 const Profile = () => {
   const { user, isAdmin, isDoctor, isPatient, updateProfile } = useAuth();
   const navigate = useNavigate();
@@ -57,6 +59,36 @@ const Profile = () => {
     }
   }, [user]);
 
+  // Fetch latest profile from server for doctors to keep in sync
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (!user?._id || !isDoctor) return;
+      try {
+        const res = await fetch(`${SERVER_URL}/api/doctors/${user._id}`);
+        const data = await res.json();
+        if (data?.success && data?.doctor) {
+          const doc = data.doctor;
+          const merged = {
+            name: doc.name || '',
+            email: doc.email || '',
+            phone: doc.phone || '',
+            location: doc.location || '',
+            specialization: doc.specialization || '',
+            experience: doc.experience || '',
+            hospital: doc.hospital || ''
+          };
+          setFormData(merged);
+          // Also refresh AuthContext user so rest of UI reflects latest
+          updateProfile(merged);
+        }
+      } catch (e) {
+        // Best-effort; keep local data if fetch fails
+      }
+    };
+    fetchProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDoctor, user?._id]);
+
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -68,8 +100,29 @@ const Profile = () => {
   const handleSave = async () => {
     setLoading(true);
     try {
-      // In a real app, you would make an API call to update the profile
-      updateProfile(formData);
+      if (isDoctor) {
+        // Persist to backend for doctors
+        const res = await fetch(`${SERVER_URL}/api/doctors/${user._id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formData),
+        });
+        const data = await res.json();
+        if (!data?.success) throw new Error(data?.message || 'Update failed');
+        const doc = data.doctor || {};
+        updateProfile({
+          name: doc.name,
+          email: doc.email,
+          phone: doc.phone,
+          location: doc.location,
+          specialization: doc.specialization,
+          experience: doc.experience,
+          hospital: doc.hospital,
+        });
+      } else {
+        // For patients/admin, persist locally (no backend endpoint available in codebase)
+        updateProfile(formData);
+      }
       setIsEditing(false);
       toast({
         title: "Profile Updated",

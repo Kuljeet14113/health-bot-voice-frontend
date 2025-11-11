@@ -81,6 +81,28 @@ const Chat = () => {
     setIsLoading(true);
 
     try {
+      // Handle greeting-only inputs locally with bot introduction
+      const introText = "Hello! I'm your AI healthbot assistant. I can help you with information about common symptoms and health concerns. Try typing a symptom like 'fever', 'headache', 'cough', or 'stomach pain' and I'll provide relevant health advice.\n\nYou can also use voice input by clicking the microphone button. Remember, this is for informational purposes only and should not replace professional medical advice.";
+      const trimmed = content.trim();
+      const lower = trimmed.toLowerCase();
+      const greetingPatterns = [
+        /^(hi|hello|hey)\b/i,
+        /\bhow are you\b/i,
+        /^good\s+(morning|evening|afternoon)\b/i,
+        /^hi there\b/i,
+        /^hello there\b/i
+      ];
+      if (greetingPatterns.some((re) => re.test(trimmed))) {
+        const botMessage = {
+          id: Date.now() + 1,
+          type: 'bot',
+          content: introText,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, botMessage]);
+        return; // skip backend call
+      }
+
       const token = localStorage.getItem('authToken');
       const response = await chatAPI.sendMessage(content.trim(), token);
       
@@ -96,10 +118,18 @@ const Chat = () => {
           }
         }
 
+        // Normalize basic-case disclaimer text per requirement
+        let messageText = response.message || '';
+        const oldDisclaimer = 'This appears to be a common symptom that can often be managed with self-care. However, if symptoms persist or worsen, please consult a healthcare provider.';
+        const newDisclaimer = 'here are the recommendations according to heathbot ai, but please consult your doc before taking medicines';
+        if ((response.complexity === 'basic') && messageText.includes(oldDisclaimer)) {
+          messageText = messageText.replace(oldDisclaimer, newDisclaimer);
+        }
+
         const botMessage = {
           id: Date.now() + 1,
           type: 'bot',
-          content: response.message,
+          content: messageText,
           timestamp: new Date(),
           complexity: response.complexity,
           shouldSeeDoctor: response.shouldSeeDoctor,

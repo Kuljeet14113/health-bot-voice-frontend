@@ -10,6 +10,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
+import { ScrollArea } from '../components/ui/scroll-area';
 import {  
   Heart, 
   Users,  
@@ -451,60 +452,90 @@ const Admin = () => {
 
         {/* Certificate Dialog */}
         <Dialog open={showCertificateDialog} onOpenChange={setShowCertificateDialog}>
-          <DialogContent className="max-w-4xl">
+          <DialogContent className="w-[95vw] max-w-5xl max-h-[90vh] h-[85vh] overflow-hidden">
             <DialogHeader>
               <DialogTitle>Doctor Certificate</DialogTitle>
               <DialogDescription>
                 Medical certificate for {selectedDoctor?.name}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4">
-              {certificateUrl && (
-                <div className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-5 w-5" />
-                      <span className="font-medium">Certificate File</span>
+            <div className="flex-1 min-h-0">
+              <ScrollArea className="h-[65vh] pr-2">
+                <div className="space-y-6">
+                  {certificateUrl && (
+                    <div className="border rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-5 w-5" />
+                          <span className="font-medium">Certificate File</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => window.open(`http://localhost:3000/${certificateUrl}`, '_blank')}
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            Download
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => window.open(`http://localhost:3000/${certificateUrl}`, '_blank')}
+                          >
+                            Open
+                          </Button>
+                        </div>
+                      </div>
+                      {/\.pdf$/i.test(certificateUrl) ? (
+                        <div className="rounded border overflow-auto">
+                          <iframe title="medical-certificate" src={`http://localhost:3000/${certificateUrl}`} className="w-full min-h-[60vh] h-[70vh]" />
+                        </div>
+                      ) : (
+                        <div className="rounded border overflow-auto h-[70vh] flex items-center justify-center bg-muted/30">
+                          <img alt="medical-certificate" src={`http://localhost:3000/${certificateUrl}`} className="max-w-full h-auto object-contain" />
+                        </div>
+                      )}
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => window.open(`http://localhost:3000/${certificateUrl}`, '_blank')}
-                    >
-                      <Download className="h-4 w-4 mr-1" />
-                      Download
-                    </Button>
-                  </div>
-                  {/\.pdf$/i.test(certificateUrl) ? (
-                    <iframe title="medical-certificate" src={`http://localhost:3000/${certificateUrl}`} className="w-full h-96 border rounded" />
-                  ) : (
-                    <img alt="medical-certificate" src={`http://localhost:3000/${certificateUrl}`} className="max-h-96 mx-auto" />
+                  )}
+                  {identityCertificateUrl && (
+                    <div className="border rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-5 w-5" />
+                          <span className="font-medium">Identity Proof</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => window.open(`http://localhost:3000/${identityCertificateUrl}`, '_blank')}
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            Download
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => window.open(`http://localhost:3000/${identityCertificateUrl}`, '_blank')}
+                          >
+                            Open
+                          </Button>
+                        </div>
+                      </div>
+                      {/\.pdf$/i.test(identityCertificateUrl) ? (
+                        <div className="rounded border overflow-auto">
+                          <iframe title="identity-certificate" src={`http://localhost:3000/${identityCertificateUrl}`} className="w-full min-h-[60vh] h-[70vh]" />
+                        </div>
+                      ) : (
+                        <div className="rounded border overflow-auto h-[70vh] flex items-center justify-center bg-muted/30">
+                          <img alt="identity-certificate" src={`http://localhost:3000/${identityCertificateUrl}`} className="max-w-full h-auto object-contain" />
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
-              {identityCertificateUrl && (
-                <div className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-5 w-5" />
-                      <span className="font-medium">Identity Proof</span>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => window.open(`http://localhost:3000/${identityCertificateUrl}`, '_blank')}
-                    >
-                      <Download className="h-4 w-4 mr-1" />
-                      Download
-                    </Button>
-                  </div>
-                  {/\.pdf$/i.test(identityCertificateUrl) ? (
-                    <iframe title="identity-certificate" src={`http://localhost:3000/${identityCertificateUrl}`} className="w-full h-96 border rounded" />
-                  ) : (
-                    <img alt="identity-certificate" src={`http://localhost:3000/${identityCertificateUrl}`} className="max-h-96 mx-auto" />
-                  )}
-                </div>
-              )}
+              </ScrollArea>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowCertificateDialog(false)}>

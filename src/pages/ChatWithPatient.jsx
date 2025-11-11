@@ -15,6 +15,7 @@ const ChatWithPatient = () => {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState(null); // { patientId, patientName }
   const [open, setOpen] = useState(false);
+  const [unreadCounts, setUnreadCounts] = useState({}); // { [patientId]: number }
 
   const fetchRooms = async () => {
     if (!user?._id) return;
@@ -37,9 +38,66 @@ const ChatWithPatient = () => {
     if (isDoctor && user?._id) fetchRooms();
   }, [isDoctor, user?._id]);
 
+  // Helpers for unread tracking using localStorage last-read timestamps
+  const getRoomId = (doctorId, patientId) => `${doctorId}_${patientId}`;
+  const getLastReadKey = (roomId) => `chatLastRead_${roomId}`;
+  const getLastReadTs = (roomId) => {
+    try {
+      return localStorage.getItem(getLastReadKey(roomId));
+    } catch {
+      return null;
+    }
+  };
+  const setLastReadTs = (roomId, ts = new Date().toISOString()) => {
+    try {
+      localStorage.setItem(getLastReadKey(roomId), ts);
+    } catch {}
+  };
+
+  // Compute unread counts for each patient room (messages from patient after last-read)
+  useEffect(() => {
+    const computeUnreadCounts = async () => {
+      if (!user?._id || rooms.length === 0) return;
+      const token = localStorage.getItem('authToken');
+      const entries = await Promise.all(
+        rooms.map(async (r) => {
+          const roomId = getRoomId(user._id, r.patientId);
+          const lastRead = getLastReadTs(roomId);
+          try {
+            const res = await fetch(`${SERVER_URL}/api/chat/${roomId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const data = await res.json();
+            if (!data?.success || !Array.isArray(data.messages)) return [r.patientId, 0];
+            const count = data.messages.reduce((acc, m) => {
+              const fromPatient = String(m.senderId) === String(r.patientId);
+              if (!fromPatient) return acc;
+              if (!lastRead) return acc + 1;
+              const created = new Date(m.createdAt).toISOString();
+              return created > lastRead ? acc + 1 : acc;
+            }, 0);
+            return [r.patientId, count];
+          } catch {
+            return [r.patientId, 0];
+          }
+        })
+      );
+      const map = Object.fromEntries(entries);
+      setUnreadCounts(map);
+    };
+
+    computeUnreadCounts();
+  }, [rooms, user?._id]);
+
   const openChat = (room) => {
     setSelected(room);
     setOpen(true);
+    // Mark as read immediately on open and clear counter
+    if (user?._id && room?.patientId) {
+      const roomId = getRoomId(user._id, room.patientId);
+      setLastReadTs(roomId);
+      setUnreadCounts((prev) => ({ ...prev, [room.patientId]: 0 }));
+    }
   };
 
   return (
@@ -73,9 +131,13 @@ const ChatWithPatient = () => {
                       <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
                         <UserIcon className="h-5 w-5 text-primary" />
                       </div>
-                      <div>
-                        <div className="font-medium">{r.patientName}</div>
-                        <div className="text-xs text-muted-foreground">{r.patientId}</div>
+                      <div className="font-medium flex items-center gap-2">
+                        {r.patientName}
+                        {unreadCounts[r.patientId] > 0 && (
+                          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
+                            {unreadCounts[r.patientId] > 99 ? '99+' : unreadCounts[r.patientId]}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <Button size="sm" onClick={() => openChat(r)}>

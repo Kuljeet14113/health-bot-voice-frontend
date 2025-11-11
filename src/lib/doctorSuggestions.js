@@ -4,7 +4,7 @@ import { getAllVerifiedDoctors } from '../api/doctor';
 const SPECIALTY_KEYWORDS = [
   { specialty: 'Family Medicine', keywords: ['cough', 'cold', 'fever', 'sore throat', 'runny nose', 'flu', 'body ache'] },
   { specialty: 'Pediatrics', keywords: ['child', 'kid', 'infant', 'baby', 'pediatric'] },
-  { specialty: 'Dermatology', keywords: ['skin', 'rash', 'acne', 'eczema', 'psoriasis', 'itch'] },
+  { specialty: 'Dermatology', keywords: ['skin', 'rash', 'acne', 'eczema', 'psoriasis', 'itch', 'dandruff', 'scalp', 'scalp itching', 'scalp irritation', 'seborrheic dermatitis'] },
   { specialty: 'Cardiology', keywords: ['chest pain', 'palpitation', 'heart', 'bp', 'hypertension'] },
   { specialty: 'Orthopedics', keywords: ['bone', 'joint', 'fracture', 'sprain', 'back pain', 'knee pain'] },
   { specialty: 'Neurology', keywords: ['headache', 'migraine', 'seizure', 'numbness', 'weakness', 'dizziness'] },
@@ -26,6 +26,7 @@ export const mapSymptomsToSpecialty = (text) => {
 
 const SPECIALTY_SYNONYMS = {
   'orthopedics': ['orthopedic', 'orthopaedics', 'orthopaedic', 'bones', 'joints'],
+  'dermatology': ['dermatologist', 'skin'],
   'family medicine': ['general practice', 'general practitioner', 'gp', 'primary care'],
   'internal medicine': ['physician', 'general physician'],
 };

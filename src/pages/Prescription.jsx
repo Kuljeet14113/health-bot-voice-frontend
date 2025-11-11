@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Navbar from '../components/Navbar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { prescriptionAPI } from '../api/prescription';
+import { symptomsAPI } from '../api/symptoms';
 import { mapSymptomsToSpecialty, fetchDoctorsBySpecialty } from '../lib/doctorSuggestions';
 
 const Prescription = () => {
@@ -35,6 +36,10 @@ const Prescription = () => {
   const [prescription, setPrescription] = useState(null);
   const [recommendedDoctor, setRecommendedDoctor] = useState(null);
   const [suggestedMedicines, setSuggestedMedicines] = useState([]);
+  const [symptomSuggestions, setSymptomSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const suggestTimerRef = useRef(null);
 
   const { toast } = useToast();
 
@@ -44,6 +49,71 @@ const Prescription = () => {
       [field]: value
     }));
   };
+
+  // Symptom suggestions (debounced)
+  const fetchSymptomSuggestions = async (query) => {
+    if (!query || query.length < 2) {
+      setSymptomSuggestions([]);
+      setShowSuggestions(false);
+      setSuggestionsLoading(false);
+      return;
+    }
+    setSuggestionsLoading(true);
+    try {
+      const searchResult = await symptomsAPI.searchSymptoms(query);
+      let suggestionsToShow = [];
+      if (searchResult.matches !== undefined) {
+        if (searchResult.matches && searchResult.matches.length > 0) {
+          const allSymptoms = searchResult.matches.flatMap(item => item.symptoms);
+          suggestionsToShow = [...new Set(allSymptoms)].slice(0, 5);
+        } else if (searchResult.hasSpellingSuggestions && searchResult.spellSuggestions.length > 0) {
+          suggestionsToShow = searchResult.spellSuggestions.slice(0, 5);
+        }
+      } else if (Array.isArray(searchResult)) {
+        if (searchResult.length > 0) {
+          const allSymptoms = searchResult.flatMap(item => item.symptoms);
+          suggestionsToShow = [...new Set(allSymptoms)].slice(0, 5);
+        }
+      }
+      if (suggestionsToShow.length > 0) {
+        setSymptomSuggestions(suggestionsToShow);
+        setShowSuggestions(true);
+      } else {
+        setSymptomSuggestions([]);
+        setShowSuggestions(false);
+      }
+    } catch (e) {
+      setSymptomSuggestions([]);
+      setShowSuggestions(false);
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  };
+
+  const handleSymptomsInputChange = (value) => {
+    setSymptoms(value);
+    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+    if (!value.trim()) {
+      setSymptomSuggestions([]);
+      setShowSuggestions(false);
+      setSuggestionsLoading(false);
+      return;
+    }
+    suggestTimerRef.current = setTimeout(() => {
+      fetchSymptomSuggestions(value);
+    }, 300);
+  };
+
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (showSuggestions && !e.target.closest('.symptoms-suggest-container')) {
+        setShowSuggestions(false);
+        setSymptomSuggestions([]);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [showSuggestions]);
 
   const handleNumberChange = (field, value) => {
     if (value === '') {
@@ -77,13 +147,16 @@ const Prescription = () => {
       return;
     }
 
-    // Validate non-negative age/weight
+    // Validate age/weight: cannot be negative or zero
     const ageNum = patientInfo.age === '' ? null : Number(patientInfo.age);
     const weightNum = patientInfo.weight === '' ? null : Number(patientInfo.weight);
-    if ((ageNum !== null && ageNum < 0) || (weightNum !== null && weightNum < 0)) {
+    if (
+      (ageNum !== null && ageNum <= 0) ||
+      (weightNum !== null && weightNum <= 0)
+    ) {
       toast({
         title: "Invalid Input",
-        description: "Age and Weight cannot be negative.",
+        description: "Age and Weight must be greater than zero.",
         variant: "destructive"
       });
       return;
@@ -110,14 +183,13 @@ const Prescription = () => {
       if (response.success) {
         setPrescription(cleansePrescriptionText(response.prescription));
 
-        let doctor = response.doctor || null;
-        if (!doctor) {
-          const specialty = mapSymptomsToSpecialty(symptoms.trim());
-          if (specialty) {
-            const matches = await fetchDoctorsBySpecialty(specialty);
-            if (matches && matches.length > 0) {
-              doctor = matches[0];
-            }
+        // Always recommend doctor from DB based on mapped specialty; ignore response.doctor
+        let doctor = null;
+        const specialty = mapSymptomsToSpecialty(symptoms.trim());
+        if (specialty) {
+          const matches = await fetchDoctorsBySpecialty(specialty);
+          if (matches && matches.length > 0) {
+            doctor = matches[0];
           }
         }
 
@@ -287,14 +359,48 @@ Location: ${recommendedDoctor.location}`;
             <CardContent className="space-y-6">
               <div className="space-y-2">
                 <Label htmlFor="symptoms">Describe Your Symptoms</Label>
-                <div className="relative">
+                <div className="relative symptoms-suggest-container">
                   <Textarea
                     id="symptoms"
                     value={symptoms}
-                    onChange={(e) => setSymptoms(e.target.value)}
+                    onChange={(e) => handleSymptomsInputChange(e.target.value)}
                     placeholder="Please describe your symptoms in detail (e.g., headache, fever, cough, fatigue...)"
                     className="min-h-[120px] pr-12"
-                  />                 
+                  />
+                  {showSuggestions && (
+                    <div className="absolute top-full mt-1 left-0 right-0 bg-popover border border-border rounded-md shadow-lg z-30 max-h-56 overflow-y-auto">
+                      {suggestionsLoading ? (
+                        <div className="px-4 py-2 text-sm text-muted-foreground flex items-center gap-2">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Searching symptoms...
+                        </div>
+                      ) : symptomSuggestions.length > 0 ? (
+                        <>
+                          <div className="px-3 py-1 text-xs font-medium text-muted-foreground bg-muted/50 border-b border-border">
+                            Symptom Suggestions
+                          </div>
+                          {symptomSuggestions.map((s, idx) => (
+                            <button
+                              key={`${s}-${idx}`}
+                              type="button"
+                              onClick={() => {
+                                setSymptoms(s);
+                                setShowSuggestions(false);
+                                setSymptomSuggestions([]);
+                              }}
+                              className="w-full text-left px-3 py-2 hover:bg-muted transition-colors border-b border-border last:border-b-0 group"
+                            >
+                              <span className="text-sm group-hover:text-primary transition-colors">{s}</span>
+                            </button>
+                          ))}
+                        </>
+                      ) : (
+                        <div className="px-4 py-2 text-sm text-muted-foreground">
+                          No symptoms found
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
