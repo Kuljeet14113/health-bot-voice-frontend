@@ -146,17 +146,20 @@ const Prescription = () => {
       });
       return;
     }
-
-    // Validate age/weight: cannot be negative or zero
-    const ageNum = patientInfo.age === '' ? null : Number(patientInfo.age);
-    const weightNum = patientInfo.weight === '' ? null : Number(patientInfo.weight);
-    if (
-      (ageNum !== null && ageNum <= 0) ||
-      (weightNum !== null && weightNum <= 0)
-    ) {
+    const ageNum = Number(patientInfo.age);
+    const weightNum = Number(patientInfo.weight);
+    if (!patientInfo.age || !patientInfo.weight || !patientInfo.allergies.trim() || !patientInfo.medications.trim()) {
+      toast({
+        title: "Missing Information",
+        description: "Please fill Age, Weight, Allergies, and Current Medications.",
+        variant: "destructive"
+      });
+      return;
+    }
+    if (Number.isNaN(ageNum) || Number.isNaN(weightNum) || ageNum <= 0 || weightNum <= 0) {
       toast({
         title: "Invalid Input",
-        description: "Age and Weight must be greater than zero.",
+        description: "Age and Weight must be valid numbers greater than zero.",
         variant: "destructive"
       });
       return;
@@ -406,7 +409,7 @@ Location: ${recommendedDoctor.location}`;
 
               {/* Patient Information */}
               <div className="space-y-4">
-                <h3 className="font-medium">Patient Information (Optional)</h3>
+                <h3 className="font-medium">Patient Information</h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="age">Age</Label>
@@ -417,6 +420,7 @@ Location: ${recommendedDoctor.location}`;
                       min={0}
                       onChange={(e) => handleNumberChange('age', e.target.value)}
                       placeholder="Age"
+                      required
                     />
                   </div>
                   <div className="space-y-2">
@@ -428,6 +432,7 @@ Location: ${recommendedDoctor.location}`;
                       min={0}
                       onChange={(e) => handleNumberChange('weight', e.target.value)}
                       placeholder="Weight"
+                      required
                     />
                   </div>
                 </div>
@@ -438,6 +443,7 @@ Location: ${recommendedDoctor.location}`;
                     value={patientInfo.allergies}
                     onChange={(e) => handleInputChange('allergies', e.target.value)}
                     placeholder="List any known allergies"
+                    required
                   />
                 </div>
                 <div className="space-y-2">
@@ -447,6 +453,7 @@ Location: ${recommendedDoctor.location}`;
                     value={patientInfo.medications}
                     onChange={(e) => handleInputChange('medications', e.target.value)}
                     placeholder="List current medications"
+                    required
                   />
                 </div>
               </div>
@@ -454,7 +461,14 @@ Location: ${recommendedDoctor.location}`;
               <Button 
                 onClick={generatePrescription}
                 className="w-full"
-                disabled={isLoading || !symptoms.trim()}
+                disabled={
+                  isLoading ||
+                  !symptoms.trim() ||
+                  !patientInfo.age || Number.isNaN(Number(patientInfo.age)) || Number(patientInfo.age) <= 0 ||
+                  !patientInfo.weight || Number.isNaN(Number(patientInfo.weight)) || Number(patientInfo.weight) <= 0 ||
+                  !patientInfo.allergies.trim() ||
+                  !patientInfo.medications.trim()
+                }
               >
                 {isLoading ? (
                   <>

@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Label } from '../components/ui/label';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 
 const DoctorHome = () => {
   const { user, logout, isDoctor } = useAuth();
@@ -62,12 +63,13 @@ const DoctorHome = () => {
     notes: '',
     isUrgent: false,
   });
+  const [bookedNextSlots, setBookedNextSlots] = useState([]);
 
   // Half-hour time slots (AM/PM) and converters
   const timeSlots = [
     '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM',
     '12:00 PM', '12:30 PM', '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM',
-    '03:00 PM', '03:30 PM', '04:00 PM', '04:30 PM', '05:00 PM', '05:30 PM'
+    '03:00 PM', '03:30 PM', '04:00 PM', '04:30 PM', '05:00 PM'
   ];
 
   const toAmPmFrom24 = (hhmm) => {
@@ -89,6 +91,64 @@ const DoctorHome = () => {
     } catch {
       return '';
     }
+  };
+
+  const isToday = (dateString) => {
+    if (!dateString) return false;
+    const d = new Date(dateString);
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  };
+
+  const isPastTimeForSelectedDate = (dateString, timeAmPm) => {
+    if (!dateString || !timeAmPm) return false;
+    const [time, mer] = timeAmPm.split(' ');
+    let [h, m] = time.split(':').map(Number);
+    let hours24 = h % 12 + (mer === 'PM' ? 12 : 0);
+    if (mer === 'AM' && h === 12) hours24 = 0;
+    const slot = new Date(dateString);
+    slot.setHours(hours24, m, 0, 0);
+    return slot.getTime() < Date.now();
+  };
+
+  // Fetch availability for Assign Next when date changes
+  useEffect(() => {
+    const fetchNextAvailability = async () => {
+      if (!nextModalOpen || !user?._id || !nextForm.appointmentDate) return;
+      try {
+        const resp = await fetch(`http://localhost:3000/api/appointments/doctor/${user._id}/availability?date=${nextForm.appointmentDate}`);
+        const data = await resp.json();
+        if (data?.success) {
+          setBookedNextSlots(Array.isArray(data.bookedSlots) ? data.bookedSlots : []);
+        } else {
+          setBookedNextSlots([]);
+        }
+      } catch {
+        setBookedNextSlots([]);
+      }
+    };
+    fetchNextAvailability();
+  }, [nextModalOpen, user?._id, nextForm.appointmentDate]);
+
+  const todayYmd = new Date().toISOString().split('T')[0];
+  const isPastDate = (ymd) => {
+    if (!ymd) return false;
+    const d = new Date(`${ymd}T00:00:00`);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return d < today;
+  };
+  const isWeekendDate = (ymd) => {
+    if (!ymd) return false;
+    const d = new Date(`${ymd}T00:00:00`);
+    const day = d.getDay();
+    return day === 0 || day === 6;
+  };
+  const isTimeInBusinessHours = (hhmm) => {
+    if (!hhmm || !hhmm.includes(':')) return false;
+    const [h, m] = hhmm.split(':').map(Number);
+    const total = h * 60 + m;
+    return total >= 9 * 60 && total <= 17 * 60;
   };
 
   // Redirect non-doctors away from this page
@@ -188,6 +248,21 @@ const DoctorHome = () => {
       toast({ title: 'Missing fields', description: 'Please select date, time and reason.', variant: 'destructive' });
       return;
     }
+    if (isPastDate(appointmentDate)) {
+      toast({ title: 'Invalid date', description: 'You cannot book a past date.', variant: 'destructive' });
+      return;
+    }
+    if (isWeekendDate(appointmentDate)) {
+      toast({ title: 'Weekend not allowed', description: 'Saturdays and Sundays are not available for booking.', variant: 'destructive' });
+      return;
+    }
+    const timeForCheck = (appointmentTime?.includes('AM') || appointmentTime?.includes('PM'))
+      ? to24FromAmPm(appointmentTime)
+      : appointmentTime;
+    if (!isTimeInBusinessHours(timeForCheck)) {
+      toast({ title: 'Invalid time', description: 'Time must be between 9:00 AM and 5:00 PM.', variant: 'destructive' });
+      return;
+    }
     try {
       const selectedAmPm = appointmentTime.includes('AM') || appointmentTime.includes('PM')
         ? appointmentTime
@@ -231,14 +306,16 @@ const DoctorHome = () => {
           const availResp = await fetch(`http://localhost:3000/api/appointments/doctor/${user?._id}/availability?date=${nextForm.appointmentDate}`);
           const avail = await availResp.json();
           const currentlyBooked = Array.isArray(avail.bookedSlots) ? avail.bookedSlots : [];
-          const selectedAmPm = toAmPmFrom24(nextForm.appointmentTime);
+          const selectedAmPm = (nextForm.appointmentTime?.includes('AM') || nextForm.appointmentTime?.includes('PM'))
+            ? nextForm.appointmentTime
+            : toAmPmFrom24(nextForm.appointmentTime);
           const idx = timeSlots.findIndex(t => t === selectedAmPm);
           let suggestion = '';
           for (let i = idx + 1; i < timeSlots.length; i++) {
             if (!currentlyBooked.includes(timeSlots[i])) { suggestion = timeSlots[i]; break; }
           }
           if (suggestion) {
-            setNextForm(prev => ({ ...prev, appointmentTime: to24FromAmPm(suggestion) }));
+            setNextForm(prev => ({ ...prev, appointmentTime: suggestion }));
             toast({ title: 'Slot Unavailable', description: `That time just got booked. Suggested next slot set to ${suggestion}. Please submit again.` });
           } else {
             toast({ title: 'No Slots Available', description: 'No further slots are available today. Please choose another date.', variant: 'destructive' });
@@ -832,18 +909,48 @@ const DoctorHome = () => {
                 <Input
                   id="next-date"
                   type="date"
+                  min={todayYmd}
                   value={nextForm.appointmentDate}
-                  onChange={(e) => setNextForm({ ...nextForm, appointmentDate: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) { setNextForm({ ...nextForm, appointmentDate: val }); return; }
+                    if (isPastDate(val)) {
+                      toast({ title: 'Invalid date', description: 'You cannot book a past date.', variant: 'destructive' });
+                      return;
+                    }
+                    if (isWeekendDate(val)) {
+                      toast({ title: 'Weekend not allowed', description: 'Saturdays and Sundays are not available for booking.', variant: 'destructive' });
+                      return;
+                    }
+                    setNextForm({ ...nextForm, appointmentDate: val });
+                  }}
                 />
               </div>
               <div>
                 <Label htmlFor="next-time">Time</Label>
-                <Input
-                  id="next-time"
-                  type="time"
-                  value={nextForm.appointmentTime}
-                  onChange={(e) => setNextForm({ ...nextForm, appointmentTime: e.target.value })}
-                />
+                <Select
+                  value={nextForm.appointmentTime ? toAmPmFrom24(nextForm.appointmentTime) : ''}
+                  onValueChange={(value) => {
+                    // Value is AM/PM; store as 24h in state for input control
+                    setNextForm({ ...nextForm, appointmentTime: to24FromAmPm(value) });
+                  }}
+                >
+                  <SelectTrigger id="next-time">
+                    <SelectValue placeholder="Select time slot" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {timeSlots.map((time) => {
+                      const taken = bookedNextSlots.includes(time);
+                      const past = isToday(nextForm.appointmentDate) && isPastTimeForSelectedDate(nextForm.appointmentDate, time);
+                      const disabled = taken || past;
+                      return (
+                        <SelectItem key={time} value={time} disabled={disabled} className={taken ? 'text-red-600' : ''}>
+                          {taken ? `${time} (Booked)` : past ? `${time} (Past)` : time}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div>
